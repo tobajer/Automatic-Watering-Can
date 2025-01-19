@@ -1,8 +1,9 @@
 /*
+ * Automatic Watering Can
  * main.c
  *
  * Created: 1/5/2025 8:06:56 PM
- *  Author: tbajr
+ *  Author: tobajer
  */ 
 #define F_CPU 600000UL
 
@@ -16,7 +17,7 @@
 #include <util/delay.h>
 
 /******************
-Code mode:
+Code compilation mode:
 0 - watering (normal operation)
 1 - period potentiometer calibration
 2 - water volume potentiometer calibration
@@ -24,75 +25,44 @@ Code mode:
 *******************/
 #define CODE_MODE 0
 
-// Definicje pinów
+// Pins definitions
 #define LED_PIN PB1
 #define PUMP_PIN PB3
 #define ADC_PIN PB4
 #define WATERING_PIN PB1
 
-// Wartoœci liczników czasu
+// Some constants
 #define WDT_MAX_COUNT 8
-
-//max. okres miêdzy podlewaniami, w godzinach
 #define MAX_PERIOD_IN_HOUR 168
 
-// Domyœlne czasy pracy pompki (w sekundach)
-//uint8_t rst_flag = 1;
+// initialize wdt_counter with highest value to run pump right after reset
 volatile uint32_t wdt_counter = (uint32_t)(MAX_PERIOD_IN_HOUR + 1) * 60 * 60;
-//uint32_t pump_period;
-volatile bool heartbit = 0;
 
 void init_adc_for_period(void) {
-	// Konfiguracja ADC z napiêciem odniesienia Vcc, wejœcie PB4
-	ADCSRA = 0;	//wylacz ADC
-	//_delay_ms(1);	//poczekaj chwile
+	ADCSRA = 0;	//disable ADC
 	ADMUX = (1 << MUX1); // Vref = Vcc, ADC2 (PB4)
-	ADCSRA = (1 << ADEN) | (1 << ADPS1) | (1 << ADPS0); // W³¹cz ADC, preskaler 8
-	_delay_ms(5);	//poczekaj chwile
+	ADCSRA = (1 << ADEN) | (1 << ADPS1) | (1 << ADPS0); // Enable ADC, prescaler 8
+	_delay_ms(5);	//wait a while
 }
 
 void init_adc_for_watering(void) {
-	// Konfiguracja ADC z napiêciem odniesienia Vcc, wejœcie PB4
-	ADCSRA = 0;	//wylacz ADC
-	//_delay_ms(1);	//poczekaj chwile
+	ADCSRA = 0;	//disable ADC
 	ADMUX = (1 << MUX0); // Vref = Vcc, ADC1 (PB2)
-	ADCSRA = (1 << ADEN) | (1 << ADPS1) | (1 << ADPS0); // W³¹cz ADC, preskaler 8
-	_delay_ms(5);	//poczekaj chwile
+	ADCSRA = (1 << ADEN) | (1 << ADPS1) | (1 << ADPS0); // Enable ADC, prescaler 8
+	_delay_ms(5);	//wait a while
 }
 
 void init_adc_for_battery_monitor(void) {
-	// Konfiguracja ADC z napiêciem odniesienia 1.1V, wejœcie PB4
-	ADCSRA = 0;	//wylacz ADC
-	//_delay_ms(1);	//poczekaj chwile
+	ADCSRA = 0;	//disable ADC
 	ADMUX = (1 << REFS0) | (1 << MUX1) | (1 << MUX0); // Vref = 1.1V, ADC3 (PB3)
-	ADCSRA = (1 << ADEN) | (1 << ADPS1) | (1 << ADPS0); // W³¹cz ADC, preskaler 8
-	_delay_ms(5);	//poczekaj chwile
+	ADCSRA = (1 << ADEN) | (1 << ADPS1) | (1 << ADPS0); // Enable ADC, prescaler 8
+	_delay_ms(5);	//wait a while
 }
 
 uint16_t read_adc(void) {
-	ADCSRA |= (1 << ADSC); // Rozpocznij konwersjê
-	while (ADCSRA & (1 << ADSC)); // Czekaj na zakoñczenie
+	ADCSRA |= (1 << ADSC); // start conversion
+	while (ADCSRA & (1 << ADSC)); // wait until end
 	return ADC;
-}
-
-void init_led(void) {
-	DDRB |= (1 << LED_PIN); // LED i pompka jako wyjœcia
-	PORTB &= ~(1 << LED_PIN); // Wy³¹cz LED i pompkê
-}
-
-void init_pump_pin_as_output(void) {
-	DDRB |= (1 << PUMP_PIN); // LED i pompka jako wyjœcia
-	PORTB &= ~(1 << PUMP_PIN); // Wy³¹cz LED i pompkê
-}
-
-void init_pump_pin_as_input(void) {
-	DDRB &= ~(1 << PUMP_PIN); // pin pompki jako wejscie do monioringu napiecia baterii
-	PORTB &= ~(1 << PUMP_PIN); // no pull-up, tri-state
-}
-
-inline void init_wdt(void) {
-	// WDT: najd³u¿szy okres (~8s), w trybie interrupt
-	WDTCR = (1 << WDTIE) | (1 << WDP3) | (1 << WDP0);
 }
 
 inline void led_on(void){
@@ -101,6 +71,16 @@ inline void led_on(void){
 
 inline void led_off(void){
 	PORTB &= ~(1 << LED_PIN);
+}
+
+void init_led(void) {
+	DDRB |= (1 << LED_PIN); // 
+	led_off();
+}
+
+inline void init_wdt(void) {
+	// WDT: set longest period (~8s), interrupt mode
+	WDTCR = (1 << WDTIE) | (1 << WDP3) | (1 << WDP0);
 }
 
 void blink_led(uint8_t times) {
@@ -112,7 +92,17 @@ void blink_led(uint8_t times) {
 	}
 }
 
-// configuration - interwal pomiedzy kolejnymi podlewaniami
+void init_pump_pin_as_output(void) {
+	DDRB |= (1 << PUMP_PIN);
+	PORTB &= ~(1 << PUMP_PIN);
+}
+
+void init_pump_pin_as_input(void) {
+	DDRB &= ~(1 << PUMP_PIN); // pin as input for battery voltage read
+	PORTB &= ~(1 << PUMP_PIN); // no pull-up, tri-state
+}
+
+
 uint16_t get_battery_level(void) {
 	
 	init_pump_pin_as_input();
@@ -217,30 +207,28 @@ int main(void) {
 	const uint16_t battery_low_threshold2 = 2806;	//mV corresponding to real 2850mV considering -1.55% adc conversion to mV
 	const uint16_t battery_low_threshold3 = 2658;	//mV corresponding to real 2700mV considering -1.55% adc conversion to mV
 
-	sei(); // W³¹cz globalne przerwania
+	sei(); // enable interrupts
     
 	while (1) {
 
-		// Mrugniêcie LED jako wskaŸnik dzia³ania systemu
+		// Indicate it is alive
 		blink_led(1);
 
-		// Sprawdzenie napiêcia baterii
+		// check battery voltage
 		uint16_t battery_level = get_battery_level();
 			
 		if (battery_level  < battery_low_threshold1) {
-			blink_led(1); // Niski poziom baterii
+			blink_led(1); // double-blink: battery at level 1
 		}
 		else if (battery_level  < battery_low_threshold2) {
-			blink_led(2); // Niski poziom baterii
+			blink_led(2); // 3-blink: battery at level 2
 		}
 		else if (battery_level  < battery_low_threshold3) {
-			blink_led(3); // Niski poziom baterii
+			blink_led(3); // 4-blink: battery at level 3 (it is really time to charge/change the battery)
 		}
 
-/*
-		uint32_t pump_period = (uint32_t)get_pump_period_in_hour() * 3600;
-*/
-
+		//uint32_t pump_period = (uint32_t)get_pump_period_in_hour() * 3600;
+		
 		//multiply by 3600 with save ROM
 		uint32_t pump_period = get_pump_period_in_hour();
 		pump_period = (pump_period << 11)	// x2048
@@ -248,23 +236,28 @@ int main(void) {
 					+ (pump_period << 9)	// x512
 					+ (pump_period << 4);	//x16
 
-
 		// check if it is time to run pump
 		if (wdt_counter >= (pump_period / WDT_MAX_COUNT)) {
+			//if yes
+			//get water volume based on potentiometer read
 			uint16_t water_volume = get_water_volume_in_ml();
+			//convert volume to seconds of pump activations
 			uint16_t watering_period = volume_to_pump_sec(water_volume, battery_level);
 
-			// W³¹cz pompkê
+			// Turn on the pump
 			PORTB |= (1 << PUMP_PIN);
+			//run pump for certain time
 			for (uint16_t i = 0; i < watering_period; i++) {
 				_delay_ms(1000);
 			}
-			PORTB &= ~(1 << PUMP_PIN); // Wy³¹cz pompkê
+			//turn-off the pump
+			PORTB &= ~(1 << PUMP_PIN);
 
+			//initialize wdt_counter with the time passed on pumping
 			wdt_counter = watering_period / WDT_MAX_COUNT; // cnt reset
 		}
 	
-		// Przejœcie w stan uœpienia
+		// go to sleep
 		sleep_mode();
 	}
 
