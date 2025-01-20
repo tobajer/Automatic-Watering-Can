@@ -227,10 +227,18 @@ int main(void) {
 		
 		//multiply by 3600 with save ROM
 		uint32_t pump_period = get_pump_period_in_hour();
-		pump_period = (pump_period << 11)	// x2048
-					+ (pump_period << 10)	// x1024
-					+ (pump_period << 9)	// x512
-					+ (pump_period << 4);	//x16				//compensate inaccuracy of WDT 8 sec		//in my chip, the period was longer by 12.5%		pump_period -= (pump_period >> 3);	
+		pump_period = (pump_period << 11)	// x2048
+
+					+ (pump_period << 10)	// x1024
+
+					+ (pump_period << 9)	// x512
+
+					+ (pump_period << 4);	//x16
+		
+		//compensate inaccuracy of WDT 8 sec
+		//in my chip, the period was longer by 12.5%
+		pump_period -= (pump_period >> 3);	
+
 		// check if it is time to run pump
 		if (wdt_counter >= (pump_period / WDT_MAX_COUNT)) {
 
