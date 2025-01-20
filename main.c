@@ -2,6 +2,8 @@
  * Automatic Watering Can
  * main.c
  *
+ * Fuses: High=0xFF, Low=0x29
+ *
  * Created: 1/5/2025 8:06:56 PM
  *  Author: tobajer
  */ 
