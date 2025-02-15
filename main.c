@@ -2,15 +2,19 @@
  * Automatic Watering Can
  * main.c
  *
- * Fuses: High=0xFF, Low=0x29
- *
  * Created: 1/5/2025 8:06:56 PM
- *  Author: tobajer
+ *  Author: tomasz@bajraszewski.pl
+ * 
+ * Fuse settings:
+ * ATtiny25/45/85
+	 EXTENDED: 0xFF
+	 HIGH: 0xD7
+	 LOW: 0x62
  */ 
-#define F_CPU 600000UL
+
+#define F_CPU 1000000UL
 
 #include <xc.h>
-
 #include <avr/io.h>
 #include <stdbool.h>
 #include <avr/interrupt.h>
@@ -19,20 +23,22 @@
 #include <util/delay.h>
 
 /******************
-Code compilation mode:
-0 - watering (normal operation)
+Code compilation modes:
+0 - automatic watering can (normal operation)
 1 - period potentiometer calibration
-2 - water volume potentiometer calibration
-
+2 - period potentiometer verification
+3 - water volume potentiometer calibration
+4 - water volume potentiometer verification
 *******************/
 #define CODE_MODE 0
+/*****************/
 
 // Pins definitions
 #define LED_PIN PB1
 #define PUMP_PIN PB3
 #define ADC_PIN PB4
 #define WATERING_PIN PB1
-
+#define BUTTON_PIN PB0
 // Some constants
 #define WDT_MAX_COUNT 8
 #define MAX_PERIOD_IN_HOUR 168
@@ -40,28 +46,45 @@ Code compilation mode:
 // initialize wdt_counter with highest value to run pump right after reset
 volatile uint32_t wdt_counter = (uint32_t)(MAX_PERIOD_IN_HOUR + 1) * 60 * 60;
 
+#define EE_PERIOD_BASE_ADDR 0	//location of first byte of 9 in EEPROM for watering pot adc points
+#define EE_PERIOD_N 11
+#define EE_WATERING_BASE_ADDR	(EE_PERIOD_BASE_ADDR + EE_PERIOD_N)	//location of first byte of 5 in EEPROM for watering pot adc points
+#define EE_WATERING_N	7
+
+/**/
+const uint16_t target_p[EE_PERIOD_N] = {2, 6, 12, 18, 24, 48, 72, 96, 120, 144, 168};	//in hours
+const uint16_t target_w[EE_WATERING_N] = {10, 50, 100, 150, 200, 250, 270};				//in millilitres
+
+
 void init_adc_for_period(void) {
-	ADMUX = (1 << MUX1); // Vref = Vcc, ADC2 (PB4)
+	ADMUX = (1 << MUX1) | (1 << ADLAR); // Vref = Vcc, ADC2 (PB4)
 	ADCSRA = (1 << ADEN) | (1 << ADPS1) | (1 << ADPS0); // Enable ADC, prescaler 8
 	_delay_ms(5);	//wait a while
 }
 
 void init_adc_for_watering(void) {
-	ADMUX = (1 << MUX0); // Vref = Vcc, ADC1 (PB2)
+	ADMUX = (1 << MUX0) | (1 << ADLAR); // Vref = Vcc, ADC1 (PB2), left adj.
 	ADCSRA = (1 << ADEN) | (1 << ADPS1) | (1 << ADPS0); // Enable ADC, prescaler 8
 	_delay_ms(5);	//wait a while
 }
 
 void init_adc_for_battery_monitor(void) {
-	ADMUX = (1 << REFS0) | (1 << MUX1) | (1 << MUX0); // Vref = 1.1V, ADC3 (PB3)
+	
+	ADMUX = (1 << REFS1) | (1 << MUX1) | (1 << MUX0); // Vref = 1.1V, ADC3 (PB3)
 	ADCSRA = (1 << ADEN) | (1 << ADPS1) | (1 << ADPS0); // Enable ADC, prescaler 8
 	_delay_ms(5);	//wait a while
+}
+
+uint8_t read_adch(void) {
+	ADCSRA |= (1 << ADSC); // start conversion
+	while (ADCSRA & (1 << ADSC)); // wait until end
+	return ADCH;
 }
 
 uint16_t read_adc(void) {
 	ADCSRA |= (1 << ADSC); // start conversion
 	while (ADCSRA & (1 << ADSC)); // wait until end
-	return ADC;
+	return ADCW;
 }
 
 inline void led_on(void){
@@ -77,11 +100,6 @@ void init_led(void) {
 	led_off();
 }
 
-inline void init_wdt(void) {
-	// WDT: set longest period (~8s), interrupt mode
-	WDTCR = (1 << WDTIE) | (1 << WDP3) | (1 << WDP0);
-}
-
 void blink_led(uint8_t times) {
 	for (uint8_t i = 0; i < times; i++) {
 		led_on();
@@ -89,6 +107,52 @@ void blink_led(uint8_t times) {
 		led_off();
 		_delay_ms(100);
 	}
+}
+
+
+void init_button(void)
+{
+    DDRB &= ~(1 << BUTTON_PIN); // Przycisk jako wejœcie
+    PORTB |= (1 << BUTTON_PIN); // Pull-up na przycisk	
+}
+
+void wait_while_button_pressed_and_released(void)
+{
+	uint8_t cnt = 0;
+	
+	//wait on button pressed withn 5 samples (x20ms = 100ms)
+	while(cnt < 5)
+	{
+		if(!(PINB & (1 << BUTTON_PIN)) )
+		{
+			cnt++;
+		}
+		else
+		{
+			cnt = 0;
+		}
+		_delay_ms(20);
+	}
+
+	cnt = 0;
+	//wait until button released
+	while(cnt < 5)
+	{
+		if(PINB & (1 << BUTTON_PIN))
+		{
+			cnt++;
+		}
+		else
+		{
+			cnt = 0;
+		}
+		_delay_ms(20);
+	}
+}
+
+inline void init_wdt(void) {
+	// WDT: set longest period (~8s), interrupt mode
+	WDTCR = (1 << WDIE) | (1 << WDP3) | (1 << WDP0);
 }
 
 void init_pump_pin_as_output(void) {
@@ -112,26 +176,48 @@ uint16_t get_battery_level(void) {
 	Voltage divider coeff. with R1=100k|R2=1M => 11
 	ADC Coeff = 1.074218 mV/bin
 	Total ADC-to-mv-coeff = 11 * 1.0742 = 11,8163 = ~12
-	Vbatt = adc_value * 12 [mV] //error is -1.55%
+	Vbatt = adc_value * 12 [mV] //error is -1.55% which is acceptable
 	*/
 	
 	return adc_val * 12; // in mV
 }
 
+uint8_t get_period_adc_value(void)
+{
+	init_adc_for_period();
+	return read_adch();
+}
+
+uint8_t get_water_adc_value(void)
+{
+	init_adc_for_watering();
+	return read_adch();	
+}
+
 uint16_t get_water_volume_in_ml(void) {
 	
-	init_adc_for_watering();
-	uint16_t adc_val = read_adc();
+	uint16_t adc_val = get_water_adc_value();
+	uint16_t result = 0;
 
-	/* design:
-		ADC=0 --> 10ml
-		ADC=1024 --> 266ml
-		So it is easy to calculate:
-		Volume_ml = 10 + (adc * 32) / 128
-	*/
-	uint16_t water_volume_ml;
-	water_volume_ml = 10 + ((adc_val << 5) >> 7);	//calculations with values reduced by 10 to keep within u16
-	return water_volume_ml;
+	uint8_t cal, cal_prev;
+
+	cal_prev = 0;
+	for (uint8_t i = 1; i < EE_WATERING_N; i++)
+	{
+		cal = eeprom_read_byte((uint8_t *)(i + EE_WATERING_BASE_ADDR));
+		if (adc_val <= cal)
+		{
+			result = target_w[i - 1] + ((target_w[i] - target_w[i - 1]) * (adc_val - cal_prev)) / (cal - cal_prev);
+			break;
+		}
+		cal_prev = cal;
+	}
+	//if result = 0, it means the last point on scale is set below max ADC=255,
+	//hence, set result at max value
+	if (result == 0)
+		result = target_w[EE_WATERING_N - 1];
+	
+	return result;
 }
 
 uint16_t volume_to_pump_sec(uint16_t volume_ml, uint16_t Vcc_mV) {
@@ -170,40 +256,73 @@ uint16_t volume_to_pump_sec(uint16_t volume_ml, uint16_t Vcc_mV) {
 
 uint16_t get_pump_period_in_hour(void) {
 	
-	init_adc_for_period();
-	uint16_t adc_value = read_adc();
+	uint16_t adc_val = get_period_adc_value();
+	uint16_t result = 0;
 
-    // calculate_power using linear interpolation at four points
-    // for adc = 0 result 2h
-	// for adc = 128 result 24h (1 day)
-	// for adc = 192 result 72h	(3 days)
-	// for adc = 255 result 168h (7 days)
+	uint8_t cal, cal_prev;
+
+	cal_prev = 0;
+
+	for (uint8_t i = 1; i < EE_PERIOD_N; i++)
+	{
+		cal = eeprom_read_byte((uint8_t *)(i + EE_PERIOD_BASE_ADDR));
+		if (adc_val <= cal)
+		{
+			result = target_p[i - 1] + ((target_p[i] - target_p[i - 1]) * (adc_val - cal_prev)) / (cal - cal_prev);
+			break;
+		}
+		cal_prev = cal;
+	}
+	//if result = 0, it means the last point on scale is set below max ADC=255, 
+	//hence, set result at max value
+	if (result == 0)
+		result = target_p[EE_PERIOD_N - 1];
 	
-	adc_value >>= 2;	//reduce noise
-	adc_value++;
-	
-    if (adc_value <= 128) {
-			return 2 + ((adc_value * (24 - 2)) / 128);
-	    } else if (adc_value <= 192) {
-		    return 24 + (((adc_value - 128) * (72 - 24)) / 64);
-	    } else {
-		    return 72 + (((adc_value - (MAX_PERIOD_IN_HOUR + 24)) * (MAX_PERIOD_IN_HOUR - 72)) / 64);
-    }
+	return result;
+
 }
 
+#define EE_PERIOD_BASE_ADDR 0	//location of first byte of 9 in EEPROM for watering pot adc points
+#define EE_PERIOD_N 11
+#define EE_WATERING_BASE_ADDR	(EE_PERIOD_BASE_ADDR + EE_PERIOD_N)	//location of first byte of 5 in EEPROM for watering pot adc points
+#define EE_WATERING_N	7
+
+void store_default_calibration_points_to_eeprom(void)
+{
+	uint8_t cal_p0 = eeprom_read_byte((uint8_t *)(EE_PERIOD_BASE_ADDR));
+	uint8_t cal_w0 = eeprom_read_byte((uint8_t *)(EE_WATERING_BASE_ADDR));
+
+	//default calibration points for ideal pot, corresponding to scale on designed label
+	const uint8_t def_cal_p[]={0,35,64,96,128,159,186,202,217,231,255};
+	const uint8_t def_cal_w[]={0,55,103,142,185,224,255};
+
+	//when unprogrammed, both values should comprise 0xff
+	if ( (cal_p0 == 0xFF) && (cal_w0 == 0xFF))
+	{
+		eeprom_update_block((const void*)def_cal_p, (void *)(EE_PERIOD_BASE_ADDR), EE_PERIOD_N);
+		eeprom_update_block((const void*)def_cal_w, (void *)(EE_WATERING_BASE_ADDR), EE_WATERING_N);
+	}
+	blink_led(4);
+}
+
+//hear bit. WDT interrupt is triggered every ~8sec
 ISR(WDT_vect) {
 	wdt_counter++;
 }
 
+//main loop
 int main(void) {
 
 #if CODE_MODE == 0
 	init_led();
 	init_wdt();
 	set_sleep_mode(SLEEP_MODE_PWR_DOWN);
-	const uint16_t battery_low_threshold1 = 2954;	//mV corresponding to real 3000mV considering -1.55% adc conversion to mV
-	const uint16_t battery_low_threshold2 = 2806;	//mV corresponding to real 2850mV considering -1.55% adc conversion to mV
-	const uint16_t battery_low_threshold3 = 2658;	//mV corresponding to real 2700mV considering -1.55% adc conversion to mV
+	const uint16_t battery_low_threshold1 = 2954;	//mV corresponding to real 3000mV considering -1.55% adcerr conversion to mV
+	const uint16_t battery_low_threshold2 = 2806;	//mV corresponding to real 2850mV considering -1.55% adcerr conversion to mV
+	const uint16_t battery_low_threshold3 = 2658;	//mV corresponding to real 2700mV considering -1.55% adcerr conversion to mV
+
+	//if EEPROM is unprogrammed, it is burned with default calibrations 
+	store_default_calibration_points_to_eeprom();
 
 	sei(); // enable interrupts
     
@@ -225,24 +344,16 @@ int main(void) {
 			blink_led(3); // 4-blink: battery at level 3 (it is really time to charge/change the battery)
 		}
 
-		//uint32_t pump_period = (uint32_t)get_pump_period_in_hour() * 3600;
-		
-		//multiply by 3600 with save ROM
-		uint32_t pump_period = get_pump_period_in_hour();
-		pump_period = (pump_period << 11)	// x2048
-
-					+ (pump_period << 10)	// x1024
-
-					+ (pump_period << 9)	// x512
-
-					+ (pump_period << 4);	//x16
+		uint32_t pump_period = (uint32_t)get_pump_period_in_hour() * 3600;
 		
 		//compensate inaccuracy of WDT 8 sec
 		//in my chip, the period was longer by 12.5%
-		pump_period -= (pump_period >> 3);	
-
+		pump_period -= (pump_period >> 3);
+			
 		// check if it is time to run pump
 		if (wdt_counter >= (pump_period / WDT_MAX_COUNT)) {
+
+			wdt_counter = 0; // cnt reset
 
 			//get water volume based on potentiometer read
 			uint16_t water_volume = get_water_volume_in_ml();
@@ -250,14 +361,14 @@ int main(void) {
 			// Turn on the pump
 			led_on();
 			_delay_ms(1000);	//let voltage stabilize under load
-			//check voltage under load (by LED which gets 3mA, not so much but something)
-			//would be better to measure under pump running, but it share the same pin
+			//check voltage under load (by LED which gets 1-3mA, not so much but something)
+			//would be better to measure under pump running, but it shares the same pin
 			uint16_t vcc_under_load = get_battery_level();
+			//convert volume to seconds of pump activations
+			uint16_t watering_period = volume_to_pump_sec(water_volume, vcc_under_load);
 
 			init_pump_pin_as_output();
 			PORTB |= (1 << PUMP_PIN);
-			//convert volume to seconds of pump activations
-			uint16_t watering_period = volume_to_pump_sec(water_volume, vcc_under_load);
 
 			//run pump for certain time
 			for (uint16_t i = 0; i < watering_period; i++) {
@@ -268,8 +379,6 @@ int main(void) {
 			PORTB &= ~(1 << PUMP_PIN);
 			led_off();
 			init_pump_pin_as_input();
-			//initialize wdt_counter with the time passed on pumping
-			wdt_counter = watering_period / WDT_MAX_COUNT; // cnt reset
 		}
 	
 		// go to sleep
@@ -277,44 +386,96 @@ int main(void) {
 		sleep_mode();
 	}
 
+/* calibraton of period pot */
 #elif CODE_MODE == 1
+	uintptr_t ee_addr;
 	init_led();
-	while(1)
+	init_button();
+
+	ee_addr = EE_PERIOD_BASE_ADDR;
+
+	led_on();
+	_delay_ms(10000);
+	led_off();
+
+	for (uint8_t i=0; i<EE_PERIOD_N; i++)
 	{
-		uint32_t pump_period = get_pump_period_in_hour();
-		if (pump_period == 2)
-			blink_led(1);
-		else if (pump_period == 12)
-			blink_led(1);
-		else if (pump_period == 24)
-			blink_led(1);
-		else if (pump_period == 72)
-			blink_led(1);
-		else if (pump_period == 168)
-			blink_led(1);
-		
+		wait_while_button_pressed_and_released();
+		uint8_t adc_val = get_period_adc_value();
+		eeprom_update_byte((uint8_t *)ee_addr, adc_val ); // Zapis do EEPROM
+		blink_led(10);
+		ee_addr++;	//incremet eeprom address to store next point
 	}
 
+	//finish
+	while(1)
+	{
+		led_on();
+		_delay_ms(1000);
+		led_off();
+		_delay_ms(1000);
+	}
+
+/* verification of period pot */
 #elif CODE_MODE == 2
 	init_led();
 	while(1)
 	{
-		uint16_t water_volume = get_water_volume_in_ml();
+		uint32_t pump_period = get_pump_period_in_hour();
+		uint8_t x = 0;
+		for (uint8_t i=0; i< EE_PERIOD_N; i++)
+		{
+			if(pump_period == target_p[i])
+				x++;
+		}
+		(x > 0) ? led_on() : led_off();
+	
+	}
 
-		if (water_volume == 10)
-			blink_led(1);
-		else if (water_volume == 50)
-			blink_led(1);
-		else if (water_volume == 100)
-			blink_led(1);
-		else if (water_volume == 150)
-			blink_led(1);
-		else if (water_volume == 200)
-			blink_led(1);
-		else if (water_volume == 250)
-			blink_led(1);
-		else if (water_volume == 265)
-			blink_led(1);
+/* calibraton of watering pot */
+#elif CODE_MODE == 3
+	uintptr_t ee_addr;
+	init_led();
+	init_button();
+	
+	ee_addr = EE_WATERING_BASE_ADDR;
+
+	led_on();
+	_delay_ms(10000);
+	led_off();
+
+	for (uint8_t i=0; i<EE_WATERING_N; i++)
+	{
+		wait_while_button_pressed_and_released();
+		uint8_t adc_val = get_water_adc_value();
+		eeprom_update_byte((uint8_t *)ee_addr, adc_val ); // Zapis do EEPROM
+		blink_led(10);
+		ee_addr++;	//incremet eeprom address to store next point
+	}	
+
+	//finish
+	while(1)
+	{
+		led_on();
+		_delay_ms(1000);
+		led_off();
+		_delay_ms(1000);
+	}
+
+/* verification of watering pot */
+#elif CODE_MODE == 4
+	init_led();
+	while(1)
+	{
+		uint32_t water_volume = get_water_volume_in_ml();
+		uint8_t x = 0;
+		for (uint8_t i=0; i < EE_WATERING_N; i++)
+		{
+			if(water_volume == target_w[i])
+			x++;
+		}
+		(x > 0) ? led_on() : led_off();
+		
 	}
 
 #endif
