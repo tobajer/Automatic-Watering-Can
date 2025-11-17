@@ -1,5 +1,5 @@
 # Automatic Watering Can
-Project description is on my web page: www.bajraszewski.pl\
+Project description is on my web page: www.tobajer.eu\
 
 List of files:
 * main.c - the source code for ATtiny25/45/85
