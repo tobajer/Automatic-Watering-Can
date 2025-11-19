@@ -1,0 +1,15 @@
+# Build artifacts
+build/
+*.hex
+*.elf
+*.o
+*.map
+
+# IDE files
+.vscode/
+*.code-workspace
+
+# OS files
+.DS_Store
+Thumbs.db
+
