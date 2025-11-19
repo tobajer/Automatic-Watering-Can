@@ -1,8 +1,12 @@
 # Build artifacts
-build/
+build/*
+!build/*.hex
 *.elf
 *.o
 *.map
+
+# Documentation files to exclude
+BUG_REVIEW.md
 
 # IDE files
 .vscode/
