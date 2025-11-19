@@ -3,7 +3,8 @@
  * main.c
  *
  * Created: 1/5/2025 8:06:56 PM
- *  Author: tomasz@bajraszewski.pl
+ * Updated: 11/19/2025
+ *  Author: tobajer@poczta.onet.pl
  * 
  * Fuse settings:
  * ATtiny25/45/85
